@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -6,23 +7,26 @@ import plotly.graph_objects as go
 import mysql.connector
 from config import DB_CONFIG
 
+USE_DB = os.getenv("USE_DB", "false").lower() == "true"
+
 st.set_page_config(page_title="IPL Win Predictor", layout="wide")
 
 # Connect to database
-@st.cache_resource
-def init_connection():
-    return mysql.connector.connect(
-        host=DB_CONFIG['host'],
-        user=DB_CONFIG['user'],
-        password=DB_CONFIG['password'],
-        database='ipl_db'
-    )
+if USE_DB:
+    @st.cache_resource
+    def init_connection():
+        return mysql.connector.connect(
+            host=DB_CONFIG['host'],
+            user=DB_CONFIG['user'],
+            password=DB_CONFIG['password'],
+            database='ipl_db'
+        )
 
-try:
-    conn = init_connection()
-except Exception as e:
-    st.error(f"Failed to connect to database: {e}")
-    st.stop()
+    try:
+        conn = init_connection()
+    except Exception as e:
+        st.error(f"Failed to connect to database: {e}")
+        st.stop()
 
 # Load Data for basic lists
 @st.cache_data
@@ -31,11 +35,16 @@ def load_data():
     return matches
 
 @st.cache_data
+def load_deliveries():
+    return pd.read_csv('data/deliveries.csv')
+
+@st.cache_data
 def load_players():
-    d = pd.read_csv('data/deliveries.csv')
+    d = load_deliveries()
     return sorted(list(set(d['batsman'].dropna().unique()) | set(d['bowler'].dropna().unique())))
 
 matches = load_data()
+deliveries = load_deliveries()
 players_list = load_players()
 
 # Load Model
@@ -143,29 +152,43 @@ elif page == "Team Analytics":
     team = st.selectbox("Select Team", teams)
     
     if st.button("Get Analytics"):
-        cursor = conn.cursor(dictionary=True)
-        
-        # Win % by Venue
-        cursor.execute(f"SELECT venue, COUNT(*) as wins FROM matches WHERE winner = '{team}' GROUP BY venue ORDER BY wins DESC LIMIT 10")
-        venues_df = pd.DataFrame(cursor.fetchall())
+        if USE_DB:
+            cursor = conn.cursor(dictionary=True)
+            
+            # Win % by Venue
+            cursor.execute(f"SELECT venue, COUNT(*) as wins FROM matches WHERE winner = '{team}' GROUP BY venue ORDER BY wins DESC LIMIT 10")
+            venues_df = pd.DataFrame(cursor.fetchall())
+            
+            # Performance trend by season
+            cursor.execute(f"SELECT season, COUNT(*) as wins FROM matches WHERE winner = '{team}' GROUP BY season ORDER BY season")
+            season_df = pd.DataFrame(cursor.fetchall())
+            
+            # Head to Head Record (Heatmap style dataframe)
+            cursor.execute(f"""
+                SELECT team1, team2, winner 
+                FROM matches 
+                WHERE (team1 = '{team}' OR team2 = '{team}') AND winner != 'No Result'
+            """)
+            h2h_df = pd.DataFrame(cursor.fetchall())
+            cursor.close()
+        else:
+            venues_df = matches[matches['winner'] == team]['venue'].value_counts().reset_index()
+            venues_df.columns = ['venue', 'wins']
+            venues_df = venues_df.head(10)
+            
+            season_df = matches[matches['winner'] == team].groupby('season').size().reset_index(name='wins')
+            season_df = season_df.sort_values('season')
+            
+            h2h_df = matches[((matches['team1'] == team) | (matches['team2'] == team)) & (matches['winner'].notna()) & (matches['winner'] != 'No Result')][['team1', 'team2', 'winner']]
+
         if not venues_df.empty:
             st.subheader("Top 10 Venues by Wins")
             st.bar_chart(venues_df.set_index('venue')['wins'])
             
-        # Performance trend by season
-        cursor.execute(f"SELECT season, COUNT(*) as wins FROM matches WHERE winner = '{team}' GROUP BY season ORDER BY season")
-        season_df = pd.DataFrame(cursor.fetchall())
         if not season_df.empty:
             st.subheader("Wins per Season")
             st.line_chart(season_df.set_index('season')['wins'])
             
-        # Head to Head Record (Heatmap style dataframe)
-        cursor.execute(f"""
-            SELECT team1, team2, winner 
-            FROM matches 
-            WHERE (team1 = '{team}' OR team2 = '{team}') AND winner != 'No Result'
-        """)
-        h2h_df = pd.DataFrame(cursor.fetchall())
         if not h2h_df.empty:
             h2h_df['Opponent'] = np.where(h2h_df['team1'] == team, h2h_df['team2'], h2h_df['team1'])
             h2h_df['Won'] = np.where(h2h_df['winner'] == team, 1, 0)
@@ -174,20 +197,15 @@ elif page == "Team Analytics":
             
             st.subheader(f"Head-to-Head Win % Heatmap for {team}")
             st.dataframe(h2h_summary.style.background_gradient(cmap='coolwarm', subset=['Win %']), use_container_width=True)
-            
-        cursor.close()
 
 elif page == "Player Stats":
     st.title("🏏 Player Stats")
     player = st.selectbox("Select Player Name", players_list)
     
     if st.button("Search") and player:
-        cursor = conn.cursor(dictionary=True)
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("🏏 Batting Stats")
+        if USE_DB:
+            cursor = conn.cursor(dictionary=True)
+            
             cursor.execute(f"""
                 SELECT m.season, 
                        SUM(d.batsman_runs) as runs, 
@@ -199,6 +217,36 @@ elif page == "Player Stats":
                 ORDER BY m.season
             """)
             batting_df = pd.DataFrame(cursor.fetchall())
+            
+            cursor.execute(f"""
+                SELECT m.season, 
+                       SUM(d.total_runs - d.legbye_runs - d.bye_runs) as runs_conceded, 
+                       COUNT(CASE WHEN d.wide_runs = 0 AND d.noball_runs = 0 THEN 1 END) as legal_balls,
+                       SUM(CASE WHEN d.player_dismissed != '' AND d.dismissal_kind NOT IN ('run out', 'retired hurt', 'obstructing the field') THEN 1 ELSE 0 END) as wickets
+                FROM deliveries d 
+                JOIN matches m ON d.match_id = m.id 
+                WHERE d.bowler LIKE '%{player}%' 
+                GROUP BY m.season 
+                ORDER BY m.season
+            """)
+            bowling_df = pd.DataFrame(cursor.fetchall())
+            cursor.close()
+        else:
+            merged_bat = deliveries[deliveries['batsman'].str.contains(player, case=False, na=False)].merge(matches[['id', 'season']], left_on='match_id', right_on='id')
+            batting_df = merged_bat.groupby('season').agg(runs=('batsman_runs', 'sum'), balls=('ball', 'count')).reset_index()
+            batting_df = batting_df.sort_values('season')
+            
+            merged_bowl = deliveries[deliveries['bowler'].str.contains(player, case=False, na=False)].merge(matches[['id', 'season']], left_on='match_id', right_on='id')
+            merged_bowl['runs_conceded'] = merged_bowl['total_runs'] - merged_bowl['legbye_runs'] - merged_bowl['bye_runs']
+            merged_bowl['is_legal_ball'] = ((merged_bowl['wide_runs'] == 0) & (merged_bowl['noball_runs'] == 0)).astype(int)
+            merged_bowl['is_wicket'] = (merged_bowl['player_dismissed'].notna() & (merged_bowl['player_dismissed'] != '') & (~merged_bowl['dismissal_kind'].isin(['run out', 'retired hurt', 'obstructing the field']))).astype(int)
+            bowling_df = merged_bowl.groupby('season').agg(runs_conceded=('runs_conceded', 'sum'), legal_balls=('is_legal_ball', 'sum'), wickets=('is_wicket', 'sum')).reset_index()
+            bowling_df = bowling_df.sort_values('season')
+
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("🏏 Batting Stats")
             if not batting_df.empty:
                 total_runs = int(batting_df['runs'].sum())
                 total_balls = int(batting_df['balls'].sum())
@@ -216,18 +264,6 @@ elif page == "Player Stats":
                 
         with col2:
             st.subheader("🎾 Bowling Stats")
-            cursor.execute(f"""
-                SELECT m.season, 
-                       SUM(d.total_runs - d.legbye_runs - d.bye_runs) as runs_conceded, 
-                       COUNT(CASE WHEN d.wide_runs = 0 AND d.noball_runs = 0 THEN 1 END) as legal_balls,
-                       SUM(CASE WHEN d.player_dismissed != '' AND d.dismissal_kind NOT IN ('run out', 'retired hurt', 'obstructing the field') THEN 1 ELSE 0 END) as wickets
-                FROM deliveries d 
-                JOIN matches m ON d.match_id = m.id 
-                WHERE d.bowler LIKE '%{player}%' 
-                GROUP BY m.season 
-                ORDER BY m.season
-            """)
-            bowling_df = pd.DataFrame(cursor.fetchall())
             if not bowling_df.empty:
                 total_wickets = int(bowling_df['wickets'].sum())
                 total_runs_c = float(bowling_df['runs_conceded'].sum())
@@ -243,5 +279,3 @@ elif page == "Player Stats":
                 st.dataframe(bowling_df[['season', 'wickets', 'Economy']].set_index('season').style.format({'Economy': '{:.2f}'}), use_container_width=True)
             else:
                 st.info("No bowling records found.")
-                
-        cursor.close()
