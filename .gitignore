@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+env.bak/
+venv.bak/
+.env
+
+# Ignore large data and model files if necessary
+# Un-comment the lines below if your data/models exceed GitHub's 100MB limit
+# data/
+# models/
