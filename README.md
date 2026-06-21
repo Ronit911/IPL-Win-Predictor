@@ -11,7 +11,12 @@
 This end-to-end data science project analyzes the Kaggle IPL Complete Dataset (2008-2020) and builds a machine learning model to predict the ball-by-ball win probability of a chasing team. It features an interactive Streamlit dashboard allowing users to simulate live match situations and explore team and player analytics directly from a MySQL database.
 
 ## Screenshots
-*(Insert Screenshots here)*
+<img width="2449" height="1245" alt="Screenshot 2026-06-21 141549" src="https://github.com/user-attachments/assets/465e992f-a5a4-4bc3-b236-92c6854dc139" />
+<img width="2458" height="1308" alt="Screenshot 2026-06-21 141427" src="https://github.com/user-attachments/assets/82e4ff73-a2b6-4b54-9fd8-ba4f6f492bf2" />
+<img width="2472" height="1259" alt="Screenshot 2026-06-21 141409" src="https://github.com/user-attachments/assets/d84ecd3a-ea12-414d-ac5c-385c39b568b8" />
+
+
+
 - Simulator View
 - Analytics View
 
