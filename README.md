@@ -49,6 +49,10 @@ This end-to-end data science project analyzes the Kaggle IPL Complete Dataset (2
    streamlit run app.py
    ```
 
+## Live Demo
+ [IPL Win Predictor Dashboard](https://ipl-win-predictor-nbqlc6vuoxbxwduzgtcurx.streamlit.app)
+
+
 ## SQL Queries Summary
 The `sql/queries.sql` script answers 10 analytical questions:
 1. Win percentage by toss decision.
